@@ -1,0 +1,12 @@
+jupyter:
+  image: jupyter/datascience-notebook:latest
+  user: root
+  container_name: jupyter
+  ports:
+    - 8888:8888
+  environment:
+    JUPYTER_ENABLE_LAB: "yes"
+    GRANT_SUDO: "yes"
+    JUPYTER_TOKEN: "docker"
+  volumes:
+      - ./src:/home/jovyan:rw
