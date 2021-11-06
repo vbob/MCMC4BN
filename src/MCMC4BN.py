@@ -1,5 +1,7 @@
 import os
 import pickle
+import random
+import datetime
 
 import pandas as pd
 import numpy as np
@@ -25,19 +27,20 @@ class MCMC4BN:
         num_samples (int): Number of samples per replica
         working_dir (string): Folder where results will be saved
     """
-    def __init__(self, data, dataset_name, num_replicas=100, num_samples=100, working_dir='./output'):
+    def __init__(self, data, dataset_name, num_replicas=100, num_rounds=10, num_samples=100, working_dir='./output'):
         self.data = data
         self.dataset_name = dataset_name
         self.num_replicas = num_replicas
         self.num_samples = num_samples
-        self.working_dir = working_dir + '/' + dataset_name + "_" + str(num_samples) + "/"
+        self.num_rounds = num_rounds
+        self.working_dir = working_dir + '/' + datetime.datetime.now().isoformat() + '_' + dataset_name + "/"
         
         self.networks = dict()
         self.possible_edges = [*combinations(data.columns, 2)]
         self.edge_counts = list()
         self.values = [-1, 0, 1]
 
-        Path(self.working_dirfolder).mkdir(parents=True, exist_ok=True)    
+        Path(self.working_dir).mkdir(parents=True, exist_ok=True)    
 
     """
     Generate the replica datasets and networks
@@ -46,22 +49,34 @@ class MCMC4BN:
         estimator (pgmpy.BaseEstimator): The search algorithm used
         score (pgmpy.BaseScore): The network evaluation score used
     """
-    def generate_networks(self, estimator=HillClimbSearch, score=BDeuScore, seed=None, replace=True):
+    def generate_networks(self, estimator=HillClimbSearch, score=BDeuScore, seed=random.randint(0,1024), replace=True):
         # Generate and save the resampled datasets
-        for i in tqdm(range(self.num_replicas)):
-            df = self.data.sample(self.num_samples, replace=replace, random_state=seed*i)    
-            df.to_csv(self.working_dir + "data_" + str(i) + ".csv", index=False)
-        
+        data =  pd.read_csv("./lucas0.csv")
+
+        for i in range(self.num_replicas):
+            df = data.sample(self.num_samples, replace=True)
+            
+            outer_cv = KFold(n_splits=self.num_rounds, shuffle=True, random_state=i)
+
+            for outer_train_index, outer_test_index in outer_cv.split(df):
+                outer_train, outer_test = df.iloc[outer_train_index].reset_index(drop=True),\
+                                        df.iloc[outer_test_index].reset_index(drop=True)
+                
+                outer_train.to_csv(self.working_dir + 'data_' + str(i) + ".csv", index=False)
+   
+        networks = [*filter(lambda x: 'data_' in x, os.listdir(self.working_dir))]
         # Generate and save the networks for each resampled dataset
-        for i, file in tqdm(enumerate([*filter(lambda x: 'data_' in x, os.listdir(self.working_dir))])):
+        for i, file in enumerate(tqdm(networks)):
             df = pd.read_csv(self.working_dir + file)
             self.networks[i] = list()
 
             scoring_method = score(data=df)    
             est = estimator(data=df)
-            self[i].append(
+            self.networks[i].append(
                 est.estimate(scoring_method=scoring_method, max_indegree=5, show_progress=False)
             )
+        
+        self.count_edges()
 
     """
     Count the occurrence of edges between all variable pairs
@@ -70,26 +85,27 @@ class MCMC4BN:
         if (len(self.networks.keys()) == 0):
             raise Exception("No network generated")
 
-        self.edge_counts = [[] for i in range(len(self.networks))]
+        self.edge_counts = [[] for i in range(self.num_replicas)]
 
-        for i in tqdm(range(self.num_replicas)):
-            for j, network in enumerate(self.edge_counts[i]):
+        for i in range(self.num_replicas):
+            for j, network in enumerate(self.networks[i]):
                 self.edge_counts[i].append([])
                 
                 for edge in self.possible_edges:
                     # A --> B = self.values[0]
-                    if (edge in network.edges):
+                    if (edge in network.edges()):
                         self.edge_counts[i][j].append(self.values[0])
 
                     # A <-- B = self.values[2]
-                    elif ((edge[1], edge[0]) in network.edges):
+                    elif ((edge[1], edge[0]) in network.edges()):
                         self.edge_counts[i][j].append(self.values[2])
 
                     # A -x- B = self.values[1]
                     else: 
                         self.edge_counts[i][j].append(self.values[1])
-
-        self.edge_counts = self.edge_counts([np.array(x) for x in self.edge_counts])
+        
+        self.edge_counts = [np.array(x) for x in self.edge_counts]
+        self.edge_counts = np.array(self.edge_counts)
 
     """
     Parameters:
@@ -100,7 +116,7 @@ class MCMC4BN:
     def get_edge_frequency(self, edge_index):
         edge_frequency = list()
         
-        for edge_list in self.networks:
+        for edge_list in self.edge_counts:
             edges_obs = edge_list[:, edge_index]
 
             rightEdge = np.sum(edges_obs == self.values[0])
@@ -122,7 +138,7 @@ class MCMC4BN:
     def learn_edge(self, edge_index, chains=10, tune=10000, draws=10000, nthreads=10):
         k = len(self.values)          
         n = self.num_replicas
-        total_count = len(self.possible_edges)
+        total_count = len(self.edge_counts[0])
         edge = self.possible_edges[edge_index]
 
         observed_edges = self.get_edge_frequency(edge_index)
