@@ -129,3 +129,5 @@ dmypy.json
 .pyre/
 
 Example/output
+Example/*/output
+Example/*/output/*
