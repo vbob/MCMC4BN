@@ -51,10 +51,8 @@ class MCMC4BN:
     """
     def generate_networks(self, estimator=HillClimbSearch, score=BDeuScore, seed=random.randint(0,1024), replace=True):
         # Generate and save the resampled datasets
-        data =  pd.read_csv("./lucas0.csv")
-
         for i in range(self.num_replicas):
-            df = data.sample(self.num_samples, replace=True)
+            df = self.data.sample(self.num_samples, replace=True)
             
             outer_cv = KFold(n_splits=self.num_rounds, shuffle=True, random_state=i)
 
